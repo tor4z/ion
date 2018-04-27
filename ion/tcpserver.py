@@ -17,7 +17,7 @@ class TCPServer:
         self._proto = socket.IPPROTO_TCP
         self._sockets = {}
         self._backlog = backlog or DEFAULT_BACKLOG
-        self._satrted = False
+        self._started = False
 
     def bind(self, port):
         socks = bind_socket(self._family, None, self._type, 
@@ -29,7 +29,7 @@ class TCPServer:
     def start(self):
         for fd, conn in self._sockets.items():
             add_accept_handler(fd, self._conn_handler, conn)
-            self._satrted = True
+            self._started = True
 
     @property
     def sockets_count(self):
@@ -40,7 +40,7 @@ class TCPServer:
             sock.close()
 
     def _conn_handler(self, conn):
-        #print(conn)
+        print(conn)
         pass
 
 def bind_socket(family, addr, type, proto, port, flags, backlog):
