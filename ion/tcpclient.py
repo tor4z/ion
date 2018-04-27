@@ -14,7 +14,7 @@ class TCPClient:
         self._addr = addr
         self._port = port
         self._sock = conn_socket(self._family, self._addr, self._type, 
-                                self._proto, self._port, None)
+                                self._proto, self._port, 0)
 
     def send(self, *args, **kwargs):
         if not isinstance(data, bytes):
@@ -35,7 +35,7 @@ def conn_socket(family, addr, type, proto, port, flags):
     for item in set(socket.getaddrinfo(addr, port, family, type, proto, flags)):
         family, type, proto, canonname, sockaddr = item
         try:
-            sock = socket(family, type, proto)
+            sock = socket.socket(family, type, proto)
         except OSError as e:
             sock = None
             continue
