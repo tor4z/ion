@@ -48,7 +48,7 @@ class ELoop:
         return instance
 
     def start(self):
-        if self._satrted:
+        if self._started:
             raise RuntimeError("ELoop can not be start twice.")
         try:
             old_loop = asyncio.get_event_loop()
