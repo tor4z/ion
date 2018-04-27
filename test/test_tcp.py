@@ -21,8 +21,6 @@ class TestTCPServer(unittest.TestCase):
         s.bind(9000)
         s.start()
         s.close()
-        with self.assertRaises(OSError):
-            ELoop.current().start()
 
 class TestTCPClient(unittest.TestCase):
     def test_send_recv(self):
