@@ -23,13 +23,14 @@ class ELoop:
         if hasattr(self._CURRENT, self._INSTANCE_NAME):
             raise RuntimeError("ELoop instance exist.")
         self._started = False
-        self._async_loop = loop or asyncio.new_event_loop()
+        self._async_loop = loop or asyncio.get_event_loop()
         self._CURRENT.instance = self
 
     @classmethod
     def current(cls, instance=True):
         current = getattr(cls._CURRENT, cls._INSTANCE_NAME, None)
         if current:
+            # print(current._async_loop)
             return current
         else:
             if instance:
@@ -61,25 +62,15 @@ class ELoop:
         finally:
             asyncio.set_event_loop(old_loop)
 
-    def stop(self):
-        self._async_loop.stop()
-
     def test(self, timeout):
-        self._async_loop.call_later(timeout, self.stop)
+        self._async_loop.call_later(timeout, self.clear)
         self.start()
 
     def clear(self):
-        if self._started:
-            self.close()
         try:
             del self._CURRENT.instance
         except AttributeError:
             pass
-
-    @status_checker
-    def close(self):
-        self._async_loop.close()
-        self._started = False
 
     def add_reader(self, fd, callback, *args):
         self._async_loop.add_reader(fd, callback, *args)
