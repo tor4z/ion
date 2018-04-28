@@ -1,6 +1,59 @@
 import socket
+import functools
+import asyncio
 from .eloop import ELoop
 from .iostream import TCPStream
+from asyncio.futures import Future
+
+class Connector:
+    def __init__(self, sock, addr, loop):
+        self._socket = sock
+        self._addr = addr
+        self._loop = loop
+        self._socket.setblocking(False)
+        self._fileno = sock.fileno()
+
+    async def start(self):
+        fut = Future()
+        self._connect(fut)
+        await fut
+
+    def _connect(self, fut):
+        try:
+            self._socket.connect(self._addr)
+        except (BlockingIOError, InterruptedError):
+            fut.add_done_callback(self._connect_done)
+            self._loop.add_writer(
+                self.fileno(), self._connect_done_callback, fut
+            )
+        except Exception as e:
+            fut.set_exception(e)
+        else:
+            fut.set_result(None)
+
+    def _connect_done(self, fut):
+        self._loop.remove_writer(self.fileno())
+
+    def _connect_done_callback(self, fut):
+        if fut.cancelled():
+            return
+
+        try:
+            err = self._socket.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
+            if err != 0:
+                raise OSError(err, f"Connect to {self._addr} fail.")
+        except (BlockingIOError, InterruptedError):
+            pass
+        except Exception as e:
+            fut.set_exception(e)
+        else:
+            fut.set_result(None)
+
+    def close(self):
+        self._socket.close()
+
+    def fileno(self):
+        return self._fileno
 
 class TCPClient:
     """
@@ -15,14 +68,17 @@ class TCPClient:
         self._family = family or socket.AF_INET
         self._type = type or socket.SOCK_STREAM
         self._proto = socket.IPPROTO_TCP
+        self._loop = asyncio.get_event_loop() #ELoop.current()
 
-    def connect(self, addr, port):
+    async def connect(self, addr, port):
         sock, sockaddr = self.get_socket(addr, port)
-        return self._new_stream(sock, sockaddr)
+        return await self._new_stream(sock, sockaddr)
 
-    def _new_stream(self, sock, sockaddr):
-        stream = TCPStream(sock, sockaddr)
-        stream.connect()
+    async def _new_stream(self, sock, sockaddr):
+        connctor = Connector(sock, sockaddr, self._loop)
+        await connctor.start()
+        stream = TCPStream(connctor, sockaddr)
+        await stream.connect()
         return stream
 
     def get_socket(self, addr, port):
@@ -39,4 +95,7 @@ class TCPClient:
         return sock, sockaddr
 
 class TCPClientError(Exception):
+    pass
+
+class TCPConnError(Exception):
     pass
