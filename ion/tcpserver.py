@@ -39,9 +39,10 @@ class TCPServer:
         for sock in self._sockets.values():
             sock.close()
 
-    def _conn_handler(self, conn):
-        print(conn)
-        pass
+    def _conn_handler(self, sock):
+        conn, addr = sock.accept()
+        print("recv from clinet", conn.recv(1024))
+        conn.send(b"data")
 
 def bind_socket(family, addr, type, proto, port, flags, backlog):
     socks = []
@@ -52,6 +53,7 @@ def bind_socket(family, addr, type, proto, port, flags, backlog):
         except OSError as e:
             continue
         try:
+            sock.setblocking(True)
             sock.bind(sockaddr)
             sock.listen(backlog)
         except OSError as e:
