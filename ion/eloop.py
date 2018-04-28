@@ -61,6 +61,13 @@ class ELoop:
         finally:
             asyncio.set_event_loop(old_loop)
 
+    def stop(self):
+        self._async_loop.stop()
+
+    def test(self, timeout):
+        self._async_loop.call_later(timeout, self.stop)
+        self.start()
+
     def clear(self):
         if self._started:
             self.close()
