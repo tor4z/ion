@@ -1,25 +1,25 @@
 import socket
 import functools
 import asyncio
-from .eloop import ELoop
 from .iostream import TCPStream
-from asyncio.futures import Future
+from .connector import ABCConnector
 
-class Connector:
-    def __init__(self, sock, addr, loop):
+class Connector(ABCConnector):
+
+    def __init__(self, sock, addr, loop=None):
+        super().__init__(loop)
         self._socket = sock
         self._addr = addr
-        self._loop = loop
-        self._socket.setblocking(False)
         self._fileno = sock.fileno()
 
     async def start(self):
-        fut = Future()
+        fut = self.create_future()
         self._connect(fut)
         await fut
 
     def _connect(self, fut):
         try:
+            self._socket.setblocking(False)
             self._socket.connect(self._addr)
         except (BlockingIOError, InterruptedError):
             fut.add_done_callback(self._connect_done)
@@ -55,15 +55,13 @@ class Connector:
     def fileno(self):
         return self._fileno
 
+    def send(self, data, *args, **kwargs):
+        self._socket.send(data, *args, **kwargs)
+
+    def recv(self, size, *args, **kwargs):
+        return self._socket.recv(size, *args, **kwargs)
+
 class TCPClient:
-    """
-    Basic Example:
-    tcp = TCPClient()
-    stream = tcp.connect("python.org", 80)
-    stream.write("some data")
-    print(stream.read(1024))
-    stream.close()
-    """
     def __init__(self, family=None, type=None):
         self._family = family or socket.AF_INET
         self._type = type or socket.SOCK_STREAM
@@ -78,7 +76,7 @@ class TCPClient:
         connctor = Connector(sock, sockaddr, self._loop)
         await connctor.start()
         stream = TCPStream(connctor, sockaddr)
-        await stream.connect()
+        stream.connect()
         return stream
 
     def get_socket(self, addr, port):
