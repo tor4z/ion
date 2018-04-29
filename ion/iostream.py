@@ -1,6 +1,6 @@
 import collections
-from concurrent.futures import Future
-from .eloop import ELoop
+import asyncio
+from asyncio.futures import Future
 
 class Buffer:
     _BIG_DATA = 2048
@@ -75,18 +75,27 @@ class Buffer:
         self._size = 0
 
 class IOStream:
-    def __init__(self):
+    def __init__(self, connctor, loop=None):
         self._read_buffer = bytearray()
         self._write_buffer = Buffer()
         self._connected = False
+        self._closed = False
+        self._connctor = connctor
+        self._fd = connctor.fileno()
+        self._loop = loop or asyncio.get_event_loop()
+
+    def create_future(self):
+        return self._loop.create_future()
 
     def connect(self):
         raise NotImplementedError
 
     def read(self, size, callback=None):
-        self._write_to_buffer()
         data = self._read_form_buffer(size)
-        return self._return_data(data, callback)
+
+        if callback is not None:
+            self._run_callback(callback, data)
+        return data
 
     def read_until(self, delimiter, callback=None):
         buffer = self._read_buffer
@@ -94,20 +103,29 @@ class IOStream:
             delimiter = bytearray(delimiter)
         pos = buffer.find(delimiter)
         data = self._read_form_buffer(pos)
-        return self._return_data(data, callback)
 
-    def _return_data(self, data, callback):
-        if callback is None:
-            future = Future()
-            future.set_result(data)
-        else:
+        if callback is not None:
             self._run_callback(callback, data)
-            future = None
-        return future
+        return data
 
-    def _read_form_buffer(self, size):
+    async def read_until_close(self, callback=None):
+        try:
+            fut = self.create_future()
+            self._read_from_fd(fut, self._fd)
+        except ConnectionResetError as e:
+            fut.set_exception(e)
+        await fut
+        data = self._read_all_form_buffer()
+        if callback is not None:
+            self._run_callback(callback, data)
+        return data
+
+    def _read_all_form_buffer(self):
+        return self._read_form_buffer(0)
+
+    def _read_form_buffer(self, size=0):
         b_size = len(self._read_buffer)
-        if size >= b_size:
+        if size >= b_size or size is 0:
             data = self._read_buffer
             self._read_buffer = bytearray()
         else:
@@ -115,71 +133,94 @@ class IOStream:
             self._read_buffer = self._read_buffer[size:]
         return data
 
-    def write(self, data):
+    async def write(self, data):
         self._write_buffer.append(data)
+        fut = self.create_future()
         if self._connected:
-            self._write_to_fd()
+            self._write_to_fd(fut)
+        await fut
 
-    def _write_to_buffer(self):
+    def _read_from_fd(self):
         raise NotImplementedError
 
-    def _write_to_fd(self):
+    def _write_to_fd(self, fut):
         raise NotImplementedError()
 
     def _after_connected(self):
-        self._connected = True
-        self._write_to_fd()
+        fut = self.create_future()
+        self._write_to_fd(fut)
 
     def _before_close(self):
-        self._write_to_fd()
+        write_fut = self.create_future()
+        self._write_to_fd(write_fut)
+        read_fut = self.create_future()
+        self._read_from_fd(read_fut, self._fd)
 
     def _run_callback(self, callback, *args):
         callback(*args)
 
 class TCPStream(IOStream):
-    def __init__(self, sock, addr):
-        self._loop = ELoop.current()
-        self._socket = sock
-        self._fd = sock.fileno()
+
+    def __init__(self, connctor, addr, loop=None):
         self._addr = addr
-        super().__init__()
+        super().__init__(connctor, loop)
 
     def connect(self):
-        try:
-            self._socket.connect(self._addr)
-        except OSError:
-            self._socket.close()
-            raise TCPConnError()
-        
         self._loop.add_reader(self._fd, self._handle_read)
         self._loop.add_writer(self._fd, self._handle_write)
+        self._connected = True
         self._after_connected()
 
     def close(self):
         self._before_close()
         self._loop.remove_reader(self._fd)
         self._loop.remove_writer(self._fd)
-        self._socket.close()
+        self._connctor.close()
+        self._closed = True
 
     def _handle_write(self):
-        self._write_to_fd()
+        self.__write_to_fd()
 
     def _handle_read(self):
-        self._write_to_buffer()
-    
-    def _write_to_fd(self):
+        self.__read_from_fd()
+
+    def _write_to_fd(self, fut, *args, **kwargs):
+        if fut.cancelled():
+            return
+        try:
+            self.__write_to_fd(*args, **kwargs)
+        except (BlockingIOError, InterruptedError):
+            self._loop.add_writer(self.fileno(), self._send, fut, *args, **kwargs)
+        except Exception as e:
+            fut.set_exception(e)
+        else:
+            fut.set_result(None)
+
+    def _read_from_fd(self, fut, fd, *args, **kwargs):
+        if fd is not None:
+            self._loop.remove_reader(fd)
+
+        if fut.cancelled():
+            return
+        try:
+            data = self.__read_from_fd(*args, **kwargs)
+        except (BlockingIOError, InterruptedError):
+            self._loop.add_reader(self._fd, self._read_from_fd, fut, 
+                                  self._fd ,*args, **kwargs)
+        except Exception as e:
+            fut.set_exception(e)
+        else:
+            fut.set_result(data)
+
+    def __write_to_fd(self, *args, **kwargs):
         size = len(self._write_buffer)
         if size > 0:
             data = self._write_buffer.peek(size)
-            self._socket.send(data)
+            self._connctor.send(data, *args, **kwargs)
 
-    def _write_to_buffer(self):
+    def __read_from_fd(self, *args, **kwargs):
         size = 1024
         while True:
-            data = self._socket.recv(size)
+            data = self._connctor.recv(size, *args, **kwargs)
             if not data: break
             self._read_buffer += data
-
-
-class TCPConnError(Exception):
-    pass
