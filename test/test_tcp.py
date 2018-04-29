@@ -3,7 +3,6 @@ import random
 import asyncio
 from ion.tcpserver import TCPServer
 from ion.tcpclient import TCPClient
-from ion.eloop import ELoop
 from concurrent.futures import ProcessPoolExecutor
 
 class TestTCPServer(unittest.TestCase):
@@ -33,7 +32,7 @@ class TestTCPClient(unittest.TestCase):
             await stream.write(b"data")
             data = await stream.read_until_close()
             self.assertTrue("HTTP" in str(data))
-            await stream.close()
+            stream.close()
 
         loop = asyncio.get_event_loop()
         loop.run_until_complete(_exec())
@@ -58,7 +57,6 @@ def _server(rs):
     s.bind(9000)
     s.start()
     s.stream_handler(handler)
-    ELoop.current().test(3)
 
 class TestTCP(unittest.TestCase):
     def test_client_server(self):
