@@ -1,5 +1,6 @@
 import socket
-from .eloop import ELoop
+import asyncio
+from .iostream import TCPStream
 
 DEFAULT_BACKLOG = 128
 
@@ -18,6 +19,8 @@ class TCPServer:
         self._sockets = {}
         self._backlog = backlog or DEFAULT_BACKLOG
         self._started = False
+        self._loop = asyncio.get_event_loop()
+        self._stream_handler = None
 
     def bind(self, port):
         socks = bind_socket(self._family, None, self._type, 
@@ -28,7 +31,7 @@ class TCPServer:
 
     def start(self):
         for fd, conn in self._sockets.items():
-            add_accept_handler(fd, self._conn_handler, conn)
+            self._loop.add_reader(fd, self._conn_handler, conn)
             self._started = True
 
     @property
@@ -41,8 +44,16 @@ class TCPServer:
 
     def _conn_handler(self, sock):
         conn, addr = sock.accept()
-        print("recv from clinet", conn.recv(1024))
-        conn.send(b"data")
+        stream = TCPStream(conn, addr)
+        stream.connect()
+        self._handle_stream(stream, addr)
+
+    def stream_handler(self, handler):
+        self._stream_handler = handler
+
+    def _handle_stream(self, stream, addr):
+        if self._stream_handler is not None:
+            self._stream_handler(stream, addr)
 
 def bind_socket(family, addr, type, proto, port, flags, backlog):
     socks = []
@@ -53,7 +64,7 @@ def bind_socket(family, addr, type, proto, port, flags, backlog):
         except OSError as e:
             continue
         try:
-            sock.setblocking(True)
+            sock.setblocking(False)
             sock.bind(sockaddr)
             sock.listen(backlog)
         except OSError as e:
@@ -62,7 +73,3 @@ def bind_socket(family, addr, type, proto, port, flags, backlog):
         socks.append((sock.fileno(), sock))
     return socks
 
-
-def add_accept_handler(fd, handler, conn):
-    loop = ELoop.current()
-    loop.add_reader(fd, handler, conn)
