@@ -3,6 +3,7 @@ import random
 import asyncio
 from ion.tcpserver import TCPServer
 from ion.tcpclient import TCPClient
+from ion.iostream import StreamHandler
 from concurrent.futures import ProcessPoolExecutor
 
 class TestTCPServer(unittest.TestCase):
@@ -24,15 +25,20 @@ class TestTCPServer(unittest.TestCase):
         s.start()
         s.close()
 
+class PyHandler(StreamHandler):
+    def read(self, stream):
+        data = stream.read(1024)
+        print(data)
+
+    async def write(self, stream):
+        await stream.write(b"data")
+
 class TestTCPClient(unittest.TestCase):
     def test_send_recv(self):
         async def _exec():
             client = TCPClient()
-            stream = await client.connect("python.org", 80)
-            await stream.write(b"data")
-            data = await stream.read_until_close()
-            self.assertTrue("HTTP" in str(data))
-            stream.close()
+            await client.connect("python.org", 80)
+            client.handle(PyHandler)
 
         loop = asyncio.get_event_loop()
         loop.run_until_complete(_exec())

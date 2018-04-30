@@ -75,15 +75,35 @@ class Buffer:
         self._size = 0
 
 class IOStream:
+    """
+    Methods:
+        connect:
+        close:
+        create_future:
+
+        write:
+        read:
+        read_until_close:
+        read_until:
+
+        _write_handler: not async
+        _read_handler: not async
+
+        _write_to_fd:
+        _read_from_fd:
+    """
+
     def __init__(self, connctor, loop=None):
         self._read_buffer = bytearray()
         self._write_buffer = Buffer()
         self._connected = False
-        self._closed = False
+        self.closed = False
         self._connctor = connctor
         self._fd = connctor.fileno()
         self._loop = loop or asyncio.get_event_loop()
-
+        self._read_fn = None
+        self._write_fn = None
+        
     def create_future(self):
         return self._loop.create_future()
 
@@ -92,7 +112,6 @@ class IOStream:
 
     def read(self, size, callback=None):
         data = self._read_form_buffer(size)
-
         if callback is not None:
             self._run_callback(callback, data)
         return data
@@ -140,6 +159,15 @@ class IOStream:
             self._write_to_fd(fut)
         await fut
 
+    def empty(self):
+        return len(self._read_buffer) == 0
+
+    def on_read(self, fn):
+        self._read_fn  = fn
+
+    def on_write(self, fn):
+        self._write_fn  = fn
+
     def _read_from_fd(self):
         raise NotImplementedError
 
@@ -148,7 +176,7 @@ class IOStream:
 
     def _after_connected(self):
         fut = self.create_future()
-        self._write_to_fd(fut)
+        self._write_to_fd(fut, None)
 
     def _before_close(self):
         write_fut = self.create_future()
@@ -158,6 +186,20 @@ class IOStream:
 
     def _run_callback(self, callback, *args):
         callback(*args)
+
+    async def _handle_write(self):
+        fut = self.create_future()
+        self._write_to_fd(fut, None)
+        if self._write_fn is not None:
+            self._write_fn(self)
+        await fut
+
+    async def _handle_read(self):
+        fut = self.create_future()
+        self._read_from_fd(fut, None)
+        if self._read_fn is not None and not self.empty():
+            self._read_fn(self)
+        await fut
 
 class TCPStream(IOStream):
 
@@ -176,21 +218,19 @@ class TCPStream(IOStream):
         self._loop.remove_reader(self._fd)
         self._loop.remove_writer(self._fd)
         self._connctor.close()
-        self._closed = True
+        self.closed = True
 
-    def _handle_write(self):
-        self.__write_to_fd()
+    def _write_to_fd(self, fut, fd, *args, **kwargs):
+        if fd is not None:
+            self._loop.remove_writer(fd)
 
-    def _handle_read(self):
-        self.__read_from_fd()
-
-    def _write_to_fd(self, fut, *args, **kwargs):
         if fut.cancelled():
             return
         try:
             self.__write_to_fd(*args, **kwargs)
         except (BlockingIOError, InterruptedError):
-            self._loop.add_writer(self.fileno(), self._send, fut, *args, **kwargs)
+            self._loop.add_writer(self._fd, self._write_to_fd, fut, 
+                self._fd, *args, **kwargs)
         except Exception as e:
             fut.set_exception(e)
         else:
@@ -206,7 +246,7 @@ class TCPStream(IOStream):
             data = self.__read_from_fd(*args, **kwargs)
         except (BlockingIOError, InterruptedError):
             self._loop.add_reader(self._fd, self._read_from_fd, fut, 
-                                  self._fd ,*args, **kwargs)
+                self._fd ,*args, **kwargs)
         except Exception as e:
             fut.set_exception(e)
         else:
@@ -216,6 +256,7 @@ class TCPStream(IOStream):
         size = len(self._write_buffer)
         if size > 0:
             data = self._write_buffer.peek(size)
+            print("write data:", data)
             self._connctor.send(data, *args, **kwargs)
 
     def __read_from_fd(self, *args, **kwargs):
@@ -223,4 +264,30 @@ class TCPStream(IOStream):
         while True:
             data = self._connctor.recv(size, *args, **kwargs)
             if not data: break
+            print("read data:", data)
             self._read_buffer += data
+
+class StreamHandler:
+
+    def __init__(self, stream):
+        self._stream = stream
+        self.setup()
+        try:
+            self._stream.on_read(self.read)
+            self._stream.on_write(self.write)
+        finally:
+            self.finish()
+            if not self._stream.closed:
+                self._stream.close()
+
+    def setup(self):
+        pass
+
+    def read(self, stream):
+        raise NotImplementedError
+
+    def write(self, stream):
+        raise NotImplementedError
+
+    def finish(self):
+        pass

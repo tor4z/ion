@@ -1,7 +1,7 @@
 import socket
 import functools
 import asyncio
-from .iostream import TCPStream
+from .iostream import TCPStream, StreamHandler
 from .connector import ABCConnector
 
 class Connector(ABCConnector):
@@ -66,11 +66,19 @@ class TCPClient:
         self._family = family or socket.AF_INET
         self._type = type or socket.SOCK_STREAM
         self._proto = socket.IPPROTO_TCP
-        self._loop = asyncio.get_event_loop() #ELoop.current()
+        self._loop = asyncio.get_event_loop()
+        self._handler_cls = None
 
     async def connect(self, addr, port):
         sock, sockaddr = self.get_socket(addr, port)
-        return await self._new_stream(sock, sockaddr)
+        stream = await self._new_stream(sock, sockaddr)
+        if self._handler_cls is None:
+            return stream
+        else:
+            self._handler_cls(stream)
+
+    def handle(self, handler):
+        self._handler_cls = handler
 
     async def _new_stream(self, sock, sockaddr):
         connctor = Connector(sock, sockaddr, self._loop)
